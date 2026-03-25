@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"dcs/raft"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -39,6 +41,24 @@ func main() {
 			nid, state, term, leader := node.GetStatus()
 			log.Printf("node=%s, state=%s term=%d leader=%s", nid, state, term, leader)
 			<-ticker.C
+		}
+	}()
+
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		fmt.Println("Type command to Propose")
+		for scanner.Scan() {
+			cmd := strings.TrimSpace(scanner.Text())
+			if cmd == "" {
+				continue
+			}
+			index, term, err := node.Propose(cmd)
+			if err != nil {
+				_, _, _, leader := node.GetStatus()
+				log.Printf("PROPOSE FAILED leader=%s error=%v", leader, err)
+			} else {
+				log.Printf("PROPOSE SUCCESS index=%d term=%d cmd%s", index, term, cmd)
+			}
 		}
 	}()
 
