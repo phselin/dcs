@@ -47,7 +47,7 @@ func (n *Node) startElection() {
 	log.Printf("node=%s STARTING ELECTION term=%d", n.id, term)
 	n.mu.Unlock()
 
-	votes := 1
+	votes := 1                         // self
 	majority := (len(n.peers)+1)/2 + 1 // majority of all nodes (peer + self)
 
 	for _, peer := range n.peers {

@@ -29,10 +29,27 @@ func (kv *KVStore) Apply(cmd Command) ApplyResult {
 	case "delete":
 		v, ok := kv.data[cmd.Key]
 		delete(kv.data, cmd.Key)
-		log.Printf("KV DELETE %s=%v", cmd.Key, v)
+		if !ok {
+			log.Printf("KV DELETE FAILED key=%s NOT FOUND", cmd.Key)
+		} else {
+			log.Printf("KV DELETE %s=%v", cmd.Key, v)
+		}
 		return ApplyResult{Ok: ok}
+	case "cas":
+		v, ok := kv.data[cmd.Key]
+		if !ok && cmd.ExpectedValue != "" {
+			log.Printf("KV CAS FAILED key-%s NOT FOUND", cmd.Key)
+			return ApplyResult{Value: "", Ok: false}
+		}
+		if ok && cmd.ExpectedValue != v {
+			log.Printf("KV CAS FAILED key=%s current=%s expected=%s", cmd.Key, v, cmd.ExpectedValue)
+			return ApplyResult{Value: v, Ok: false}
+		}
+		kv.data[cmd.Key] = cmd.Value
+		log.Printf("KV CAS key=%s val=%s->%s", cmd.Key, v, cmd.Value)
+		return ApplyResult{Value: cmd.Value, Ok: true}
 	default:
-		log.Printf("KV UNKNOWN OP %s", cmd.Op)
+		log.Printf("KV FAILED UNKNOWN OP %s", cmd.Op)
 		return ApplyResult{Ok: false}
 	}
 }
@@ -41,6 +58,9 @@ func (kv *KVStore) Get(key string) (val string, ok bool) {
 	kv.mu.RLock()
 	defer kv.mu.RUnlock()
 	val, ok = kv.data[key]
+	if !ok {
+		log.Printf("KV GET FAILED key=%s NOT FOUND", key)
+	}
 	return val, ok
 }
 

@@ -2,6 +2,7 @@ package raft
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"sync"
@@ -80,7 +81,6 @@ func (n *Node) GetStatus() (id string, state State, term int, leader string) {
 	return n.id, n.state, n.currentTerm, n.leaderID
 }
 
-// TODO remove
 func (n *Node) GetLogInfo() (logLen int, commitIndex int) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -145,7 +145,7 @@ func (n *Node) Propose(cmd Command, timeout time.Duration) (ApplyResult, error) 
 	n.mu.Lock()
 	if n.state != Leader {
 		defer n.mu.Unlock()
-		return ApplyResult{}, errors.New("not a leader, leader=" + n.leaderID)
+		return ApplyResult{}, fmt.Errorf("%w, leader=%s", ErrNotLeader, n.leaderID)
 	}
 
 	lastIndex, _ := n.lastLogIndexTerm()
@@ -167,6 +167,11 @@ func (n *Node) Propose(cmd Command, timeout time.Duration) (ApplyResult, error) 
 
 	select {
 	case result := <-pendCh:
+		if result.Ok {
+			log.Printf("APPLY SUCCESS op=%s key=%s value=%s", cmd.Op, cmd.Key, result.Value)
+		} else {
+			log.Printf("APPLY FAILED op=%s key=%s", cmd.Op, cmd.Key)
+		}
 		return result, nil
 	case <-time.After(timeout):
 		delete(n.pendingProposals, entry.Index)
@@ -178,13 +183,68 @@ func (n *Node) GetKV(key string) (val string, ok bool, err error) {
 	n.mu.Lock()
 	if n.state != Leader {
 		defer n.mu.Unlock()
-		return "", false, errors.New("not a leader, leader=" + n.leaderID)
+		return "", false, fmt.Errorf("%w, leader=%s", ErrNotLeader, n.leaderID)
 	}
 	n.mu.Unlock()
+
+	if !n.confirmLeadership() {
+		return "", false, errors.New("lost leadership")
+	}
+
 	val, ok = n.KVStore.Get(key)
 	return val, ok, nil
 }
 
+// for debugging purposes (can be called for any node)
 func (n *Node) GetAllKV() map[string]string {
 	return n.KVStore.GetAll()
+}
+
+func (n *Node) confirmLeadership() bool {
+	n.mu.Lock()
+	if n.state != Leader {
+		defer n.mu.Unlock()
+		return false
+	}
+	term := n.currentTerm
+	n.mu.Unlock()
+
+	type heartbeatResult struct {
+		success bool
+	}
+
+	resultCh := make(chan heartbeatResult, len(n.peers))
+
+	for _, peer := range n.peers {
+		go func(addr string) {
+			reply, err := n.callAppendEntries(addr, &AppendEntriesArgs{
+				Term:     term,
+				LeaderID: n.id,
+			})
+			if err != nil {
+				resultCh <- heartbeatResult{success: false}
+				return
+			}
+			resultCh <- heartbeatResult{success: reply.Success && reply.Term == term}
+		}(peer)
+	}
+
+	votes := 1
+	majority := (len(n.peers)+1)/2 + 1
+	responded := 0
+	for responded < len(n.peers) {
+		select {
+		case res := <-resultCh:
+			responded++
+			if res.success {
+				votes++
+				if votes >= majority {
+					return true
+				}
+			}
+		case <-time.After(RPCTimeout):
+			return votes >= majority
+		}
+	}
+	return votes >= majority
 }

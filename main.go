@@ -76,11 +76,13 @@ func handleCommandInput(node *raft.Node, cmdInput string) {
 			return
 		}
 		key := parts[1]
-		value := strings.Join(parts[2:], " ")
+		value := parts[2]
 		cmd := raft.Command{Op: "put", Key: key, Value: value}
 		result, err := node.Propose(cmd, proposalTimeout)
 		if err == nil {
 			fmt.Printf("PUT %s=%s\n", key, result.Value)
+		} else {
+			fmt.Printf("error=%s\n", err)
 		}
 	case "get":
 		if len(parts) < 2 {
@@ -95,6 +97,8 @@ func handleCommandInput(node *raft.Node, cmdInput string) {
 			} else {
 				fmt.Printf("NOT FOUND %s\n", key)
 			}
+		} else {
+			fmt.Printf("error=%v\n", err)
 		}
 	case "delete":
 		if len(parts) < 2 {
@@ -105,7 +109,24 @@ func handleCommandInput(node *raft.Node, cmdInput string) {
 		cmd := raft.Command{Op: "delete", Key: key}
 		result, err := node.Propose(cmd, proposalTimeout)
 		if err == nil {
-			fmt.Printf("DELETE %s=%s", key, result.Value)
+			fmt.Printf("DELETE %s=%s\n", key, result.Value)
+		} else {
+			fmt.Printf("error=%s\n", err)
+		}
+	case "cas":
+		if len(parts) < 4 {
+			fmt.Println("Incorrect usage")
+			return
+		}
+		key := parts[1]
+		expVal := parts[2]
+		val := parts[3]
+		cmd := raft.Command{Op: "cas", Key: key, ExpectedValue: expVal, Value: val}
+		result, err := node.Propose(cmd, proposalTimeout)
+		if err == nil {
+			fmt.Printf("CAS %s=%s\n", key, result.Value)
+		} else {
+			fmt.Printf("error=%s\n", err)
 		}
 	case "dump":
 		data := node.GetAllKV()

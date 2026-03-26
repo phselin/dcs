@@ -1,6 +1,9 @@
 package raft
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 type State int
 
@@ -32,9 +35,10 @@ const (
 )
 
 type Command struct {
-	Op    string `json:"op"`
-	Key   string `json:"key"`
-	Value string `json:"value"`
+	Op            string `json:"op"`
+	Key           string `json:"key"`
+	Value         string `json:"value"`
+	ExpectedValue string `json:"expected_value"`
 }
 
 type LogEntry struct {
@@ -74,3 +78,5 @@ type ApplyResult struct {
 	Ok    bool
 	Err   error
 }
+
+var ErrNotLeader = errors.New("not a leader")
