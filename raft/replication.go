@@ -1,35 +1,10 @@
 package raft
 
 import (
-	"errors"
 	"log"
 	"sort"
 	"time"
 )
-
-func (n *Node) Propose(command any) (logIndex int, term int, err error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if n.state != Leader {
-		return 0, 0, errors.New("not leader")
-	}
-
-	lastIndex, _ := n.lastLogIndexTerm()
-	entry := LogEntry{
-		Term:    n.currentTerm,
-		Index:   lastIndex + 1,
-		Command: command,
-	}
-	n.log = append(n.log, entry)
-	n.matchIndex[n.id] = entry.Index
-
-	log.Printf("node=%s PROPOSED index=%d term=%d cmd=%v", n.id, entry.Index, entry.Term, entry.Command)
-
-	n.triggerReplicate()
-
-	return entry.Index, entry.Term, nil
-}
 
 func (n *Node) triggerReplicate() {
 	select {
@@ -44,37 +19,24 @@ func (n *Node) runHeartbeats() {
 	ticker := time.NewTicker(HeartbeatInterval)
 	defer ticker.Stop()
 
-	n.replicateToAll()
-
 	for {
+		n.mu.Lock()
+		isLeader := n.state == Leader
+		if !isLeader {
+			n.mu.Unlock()
+			return
+		}
+		term := n.currentTerm
+		n.mu.Unlock()
+		for _, peer := range n.peers {
+			go n.replicateToPeer(peer, term)
+		}
 		select {
 		case <-ticker.C:
 		case <-n.triggerReplicateCh:
 		case <-n.stopCh:
 			return
 		}
-
-		n.mu.Lock()
-		isLeader := n.state == Leader
-		n.mu.Unlock()
-		if !isLeader {
-			return
-		}
-		n.replicateToAll()
-	}
-}
-
-func (n *Node) replicateToAll() {
-	n.mu.Lock()
-	if n.state != Leader {
-		n.mu.Unlock()
-		return
-	}
-	term := n.currentTerm
-	n.mu.Unlock()
-
-	for _, peer := range n.peers {
-		go n.replicateToPeer(peer, term)
 	}
 }
 
@@ -187,11 +149,10 @@ func (n *Node) handleAppendEntries(args *AppendEntriesArgs, reply *AppendEntries
 		}
 	}
 
-	// overwrite entries only if there is a conflict
 	for i, entry := range args.Entries {
 		logIndex := args.PrevLogIndex + 1 + i
 		if logIndex <= len(n.log) {
-			if n.log[logIndex-1].Term != entry.Term {
+			if n.log[logIndex-1].Term != entry.Term { // overwrite entries only if there is a conflict
 				n.log = n.log[:logIndex-1]
 				n.log = append(n.log, args.Entries[i:]...)
 				break
@@ -209,7 +170,7 @@ func (n *Node) handleAppendEntries(args *AppendEntriesArgs, reply *AppendEntries
 
 	reply.Success = true
 
-	if len(args.Entries) > 0 {
+	if len(args.Entries) > 0 { // too many logs otherwise
 		log.Printf("node=%s REPLICATED entries=%d log=%d commit=%d ", n.id, len(args.Entries), len(n.log), n.commitIndex)
 	}
 

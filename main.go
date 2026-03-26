@@ -5,7 +5,6 @@ import (
 	"dcs/raft"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"strings"
@@ -13,14 +12,16 @@ import (
 	"time"
 )
 
+const proposalTimeout = 5 * time.Second
+
 func main() {
 	id := flag.String("id", "", "unique node id")
-	addr := flag.String("addr", "", "listen address")
+	addr := flag.String("addr", "", "address")
 	peersFlag := flag.String("peers", "", "comma separated peer addresses")
 	flag.Parse()
 
 	if *id == "" || *addr == "" {
-		log.Fatalln("Incorrect usage")
+		fmt.Println("Incorrect usage")
 		os.Exit(1)
 	}
 
@@ -31,15 +32,16 @@ func main() {
 
 	node := raft.NewNode(*id, *addr, peers)
 	if err := node.Start(); err != nil {
-		log.Fatalf("Failed to START node=%v", err)
+		fmt.Printf("Failed to START node=%v\n", err)
+		os.Exit(1)
 	}
 
 	go func() {
-		ticker := time.NewTicker(2 * time.Second)
+		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
 		for {
 			nid, state, term, leader := node.GetStatus()
-			log.Printf("node=%s, state=%s term=%d leader=%s", nid, state, term, leader)
+			fmt.Printf("node=%s, state=%s term=%d leader=%s\n", nid, state, term, leader)
 			<-ticker.C
 		}
 	}()
@@ -52,13 +54,7 @@ func main() {
 			if cmd == "" {
 				continue
 			}
-			index, term, err := node.Propose(cmd)
-			if err != nil {
-				_, _, _, leader := node.GetStatus()
-				log.Printf("PROPOSE FAILED leader=%s error=%v", leader, err)
-			} else {
-				log.Printf("PROPOSE SUCCESS index=%d term=%d cmd%s", index, term, cmd)
-			}
+			handleCommandInput(node, cmd)
 		}
 	}()
 
@@ -66,4 +62,58 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	node.Stop()
+}
+
+func handleCommandInput(node *raft.Node, cmdInput string) {
+	parts := strings.Fields(cmdInput)
+	if len(parts) == 0 {
+		return
+	}
+	switch strings.ToLower(parts[0]) {
+	case "put":
+		if len(parts) < 3 {
+			fmt.Println("Incorrect usage")
+			return
+		}
+		key := parts[1]
+		value := strings.Join(parts[2:], " ")
+		cmd := raft.Command{Op: "put", Key: key, Value: value}
+		result, err := node.Propose(cmd, proposalTimeout)
+		if err == nil {
+			fmt.Printf("PUT %s=%s\n", key, result.Value)
+		}
+	case "get":
+		if len(parts) < 2 {
+			fmt.Println("Incorrect usage")
+			return
+		}
+		key := parts[1]
+		val, ok, err := node.GetKV(key)
+		if err == nil {
+			if ok {
+				fmt.Printf("GET %s=%s\n", key, val)
+			} else {
+				fmt.Printf("NOT FOUND %s\n", key)
+			}
+		}
+	case "delete":
+		if len(parts) < 2 {
+			fmt.Println("Incorrect usage")
+			return
+		}
+		key := parts[1]
+		cmd := raft.Command{Op: "delete", Key: key}
+		result, err := node.Propose(cmd, proposalTimeout)
+		if err == nil {
+			fmt.Printf("DELETE %s=%s", key, result.Value)
+		}
+	case "dump":
+		data := node.GetAllKV()
+		fmt.Println("KV Store:")
+		for k, v := range data {
+			fmt.Printf("key=%s value=%s\n", k, v)
+		}
+	case "default":
+		fmt.Println("Unknown command")
+	}
 }

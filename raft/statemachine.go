@@ -2,11 +2,12 @@ package raft
 
 import (
 	"log"
+	"maps"
 	"sync"
 )
 
 type KVStore struct {
-	mu   sync.Mutex
+	mu   sync.RWMutex
 	data map[string]string
 }
 
@@ -28,9 +29,7 @@ func (kv *KVStore) Apply(cmd Command) ApplyResult {
 	case "delete":
 		v, ok := kv.data[cmd.Key]
 		delete(kv.data, cmd.Key)
-		if ok {
-			log.Printf("KV DELETE %s=%d", cmd.Key, v)
-		}
+		log.Printf("KV DELETE %s=%v", cmd.Key, v)
 		return ApplyResult{Ok: ok}
 	default:
 		log.Printf("KV UNKNOWN OP %s", cmd.Op)
@@ -39,18 +38,16 @@ func (kv *KVStore) Apply(cmd Command) ApplyResult {
 }
 
 func (kv *KVStore) Get(key string) (val string, ok bool) {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
+	kv.mu.RLock()
+	defer kv.mu.RUnlock()
 	val, ok = kv.data[key]
 	return val, ok
 }
 
 func (kv *KVStore) GetAll() map[string]string {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
+	kv.mu.RLock()
+	defer kv.mu.RUnlock()
 	kvcpy := make(map[string]string, len(kv.data))
-	for k, v := range kv.data {
-		kvcpy[k] = v
-	}
+	maps.Copy(kvcpy, kv.data)
 	return kvcpy
 }

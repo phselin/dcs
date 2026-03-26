@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"errors"
 	"log"
 	"net"
 	"sync"
@@ -29,6 +30,9 @@ type Node struct {
 
 	listener net.Listener
 
+	KVStore *KVStore
+
+	pendingProposals   map[int]chan ApplyResult
 	resetElectionCh    chan struct{}
 	triggerReplicateCh chan struct{}
 	stopCh             chan struct{}
@@ -43,6 +47,8 @@ func NewNode(id, address string, peers []string) *Node {
 		resetElectionCh:    make(chan struct{}, 1),
 		triggerReplicateCh: make(chan struct{}, 1),
 		stopCh:             make(chan struct{}),
+		KVStore:            NewKVStore(),
+		pendingProposals:   make(map[int]chan ApplyResult),
 	}
 }
 
@@ -74,6 +80,7 @@ func (n *Node) GetStatus() (id string, state State, term int, leader string) {
 	return n.id, n.state, n.currentTerm, n.leaderID
 }
 
+// TODO remove
 func (n *Node) GetLogInfo() (logLen int, commitIndex int) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -110,7 +117,7 @@ func (n *Node) applyLoop() {
 		select {
 		case <-n.stopCh:
 			return
-		case <-time.After(10 * time.Millisecond):
+		case <-time.After(ApplyInterval):
 		}
 
 		n.mu.Lock()
@@ -122,7 +129,62 @@ func (n *Node) applyLoop() {
 		n.mu.Unlock()
 
 		for _, entry := range entries {
-			log.Printf("node=%s APPLIED index=%d term=%d cmd=%v", n.id, entry.Index, entry.Term, entry.Command)
+			result := n.KVStore.Apply(entry.Command)
+			log.Printf("node=%s APPLIED index=%d term=%d op=%s key=%s", n.id, entry.Index, entry.Term, entry.Command.Op, entry.Command.Key)
+			n.mu.Lock()
+			if ch, ok := n.pendingProposals[entry.Index]; ok {
+				ch <- result
+				delete(n.pendingProposals, entry.Index)
+			}
+			n.mu.Unlock()
 		}
 	}
+}
+
+func (n *Node) Propose(cmd Command, timeout time.Duration) (ApplyResult, error) {
+	n.mu.Lock()
+	if n.state != Leader {
+		defer n.mu.Unlock()
+		return ApplyResult{}, errors.New("not a leader, leader=" + n.leaderID)
+	}
+
+	lastIndex, _ := n.lastLogIndexTerm()
+	entry := LogEntry{
+		Term:    n.currentTerm,
+		Index:   lastIndex + 1,
+		Command: cmd,
+	}
+	n.log = append(n.log, entry)
+	n.matchIndex[n.id] = entry.Index
+
+	pendCh := make(chan ApplyResult, 1)
+	n.pendingProposals[entry.Index] = pendCh
+
+	log.Printf("node=%s PROPOSED index=%d op=%s key=%s val=%v", n.id, entry.Index, cmd.Op, cmd.Key, cmd.Value)
+
+	n.triggerReplicate()
+	n.mu.Unlock()
+
+	select {
+	case result := <-pendCh:
+		return result, nil
+	case <-time.After(timeout):
+		delete(n.pendingProposals, entry.Index)
+		return ApplyResult{}, errors.New("timed out")
+	}
+}
+
+func (n *Node) GetKV(key string) (val string, ok bool, err error) {
+	n.mu.Lock()
+	if n.state != Leader {
+		defer n.mu.Unlock()
+		return "", false, errors.New("not a leader, leader=" + n.leaderID)
+	}
+	n.mu.Unlock()
+	val, ok = n.KVStore.Get(key)
+	return val, ok, nil
+}
+
+func (n *Node) GetAllKV() map[string]string {
+	return n.KVStore.GetAll()
 }

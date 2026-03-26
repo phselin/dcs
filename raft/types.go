@@ -28,12 +28,19 @@ const (
 	MaxElectionTimeout = 1000 * time.Millisecond
 	HeartbeatInterval  = 150 * time.Millisecond
 	RPCTimeout         = 300 * time.Millisecond
+	ApplyInterval      = 10 * time.Millisecond
 )
 
+type Command struct {
+	Op    string `json:"op"`
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
 type LogEntry struct {
-	Term    int `json:"term"`
-	Index   int `json:"index"`
-	Command any `json:"command"`
+	Term    int     `json:"term"`
+	Index   int     `json:"index"`
+	Command Command `json:"command"`
 }
 
 type RequestVoteArgs struct {
@@ -60,4 +67,10 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term    int
 	Success bool
+}
+
+type ApplyResult struct {
+	Value string
+	Ok    bool
+	Err   error
 }
