@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"sync"
 	"time"
 )
@@ -33,28 +34,37 @@ type Node struct {
 
 	KVStore *KVStore
 
-	pendingProposals   map[int]chan ApplyResult
+	dataDir string
+
+	pendingProposals   map[int]chan ApplyResult // receiving and sending replication result for an index entry
 	resetElectionCh    chan struct{}
 	triggerReplicateCh chan struct{}
 	stopCh             chan struct{}
 }
 
-func NewNode(id, address string, peers []string) *Node {
+func NewNode(id, address string, peers []string, dataDir string) *Node {
 	return &Node{
 		id:                 id,
 		address:            address,
 		peers:              peers,
-		state:              Follower,
+		state:              Follower, // all nodes start out as followers
 		resetElectionCh:    make(chan struct{}, 1),
 		triggerReplicateCh: make(chan struct{}, 1),
 		stopCh:             make(chan struct{}),
 		KVStore:            NewKVStore(),
 		pendingProposals:   make(map[int]chan ApplyResult),
+		dataDir:            dataDir,
 	}
 }
 
+// starts RPC server, create directory to store node state, start periodic election timer and periodic apply entries loop
 func (n *Node) Start() error {
 	log.Printf("STARTING node=%s address=%s peers=%v", n.id, n.address, n.peers)
+
+	if n.dataDir != "" {
+		os.MkdirAll(n.dataDir, 0755)
+		n.loadState()
+	}
 
 	if err := n.startRPCServer(); err != nil {
 		return err
@@ -66,6 +76,7 @@ func (n *Node) Start() error {
 	return nil
 }
 
+// to gracefully shut down a node
 func (n *Node) Stop() {
 	close(n.stopCh)
 	if n.listener != nil {
@@ -87,14 +98,19 @@ func (n *Node) GetLogInfo() (logLen, lastApplied, commitIndex int) {
 	return len(n.log), n.lastApplied, n.commitIndex
 }
 
+// steps down to follower and updates its term to highest term seen so far
+// clears it votes
+// usually called during election but that's not always the case
 func (n *Node) stepDown(newTerm int) {
 	n.currentTerm = newTerm
 	n.state = Follower
 	n.votedFor = ""
 	log.Printf("node=%s STEPPED DOWN term=%d->%d", n.id, n.currentTerm, newTerm)
+	n.persistState() // change in term, state and votedFor
 	n.resetElectionTimer()
 }
 
+// returms the index and term of the last entry in the log
 func (n *Node) lastLogIndexTerm() (index int, term int) {
 	if len(n.log) == 0 {
 		return 0, 0
@@ -110,6 +126,9 @@ func (n *Node) logTerm(index int) int {
 	return n.log[index-1].Term
 }
 
+// all nodes
+// runs periodically to apply entries upto the commit index
+// commit index stores the index value for the entry that is present in the majority of logs
 func (n *Node) applyLoop() {
 	defer n.wg.Done()
 
@@ -141,6 +160,10 @@ func (n *Node) applyLoop() {
 	}
 }
 
+// leader only
+// adds an entry to its log and replicates it to its peers
+// returns error if it times out without any result
+// returns the result (success or failure) otherwise
 func (n *Node) Propose(cmd Command, timeout time.Duration) (ApplyResult, error) {
 	n.mu.Lock()
 	if n.state != Leader {
@@ -161,7 +184,7 @@ func (n *Node) Propose(cmd Command, timeout time.Duration) (ApplyResult, error) 
 	n.pendingProposals[entry.Index] = pendCh
 
 	log.Printf("node=%s PROPOSED index=%d op=%s key=%s val=%v", n.id, entry.Index, cmd.Op, cmd.Key, cmd.Value)
-
+	n.persistState() // new log entry
 	n.triggerReplicate()
 	n.mu.Unlock()
 
@@ -181,6 +204,8 @@ func (n *Node) Propose(cmd Command, timeout time.Duration) (ApplyResult, error) 
 	}
 }
 
+// leader only
+// confirming leadership before a read is required to make reads linearizable
 func (n *Node) GetKV(key string) (val string, ok bool, err error) {
 	n.mu.Lock()
 	if n.state != Leader {
@@ -197,11 +222,16 @@ func (n *Node) GetKV(key string) (val string, ok bool, err error) {
 	return val, ok, nil
 }
 
+// all nodes
 // for debugging purposes (can be called for any node)
 func (n *Node) GetAllKV() map[string]string {
 	return n.KVStore.GetAll()
 }
 
+// leader only
+// make a rpc on peers to append entries without any log arguments
+// (so no entries are added to the log but you get a success/failure reply)
+// if majority replies, leadership is confirmed
 func (n *Node) confirmLeadership() bool {
 	n.mu.Lock()
 	if n.state != Leader {

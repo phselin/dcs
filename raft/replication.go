@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// leader only
+// triggers replicate
+// tries to send a signal to the trigger replicate channel with a buffer capacity of one
+// if it fails, the replication has been already triggered by some other process
 func (n *Node) triggerReplicate() {
 	select {
 	case n.triggerReplicateCh <- struct{}{}:
@@ -13,6 +17,8 @@ func (n *Node) triggerReplicate() {
 	}
 }
 
+// leader only
+// replicates entries to peers periodically every heartbeat interval or when replication is triggered
 func (n *Node) runHeartbeats() {
 	defer n.wg.Done()
 
@@ -40,6 +46,13 @@ func (n *Node) runHeartbeats() {
 	}
 }
 
+// leader only
+// makes a rpc on its peers to append entries
+// entries are added starting from the last index in peer's log known by the leader
+// up to the latest entry in the leader's log
+// leader knows if its behind based on reply term and steps down
+// advances commit index upon receiving success reply
+// reduces last index known for the peer upon receiving failure reply and retries on next hearbeat
 func (n *Node) replicateToPeer(peer string, term int) {
 	n.mu.Lock()
 
@@ -98,6 +111,8 @@ func (n *Node) replicateToPeer(peer string, term int) {
 	}
 }
 
+// leader only
+// updates commit index based on quorum matching log entry index
 func (n *Node) advanceCommitIndex() {
 	matches := make([]int, 0, len(n.peers)+1)
 	matches = append(matches, n.matchIndex[n.id])
@@ -113,9 +128,15 @@ func (n *Node) advanceCommitIndex() {
 	if newCommitIndex > n.commitIndex && n.logTerm(newCommitIndex) == n.currentTerm {
 		log.Printf("node=%s COMMIT ADVANCED %d->%d", n.id, n.commitIndex, newCommitIndex)
 		n.commitIndex = newCommitIndex
+		n.persistState() // change in commitIndex
 	}
 }
 
+// returns failure if ahead (leader behind)
+// updates its term to match leader and steps down (peer behind)
+// appends entries to its logs
+// checks and resolves any conflicts between entries sent by leader and entries in logs
+// updates its commit index to apply entries in the next apply loop
 func (n *Node) handleAppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -145,9 +166,12 @@ func (n *Node) handleAppendEntries(args *AppendEntriesArgs, reply *AppendEntries
 			n.log = n.log[:args.PrevLogIndex-1]
 			log.Printf("node=%s REJECT AppendEntries CONFLICT index=%d",
 				n.id, args.PrevLogIndex)
+			n.persistState() // change in log entries
 			return nil
 		}
 	}
+
+	logChanged := false // persisting on every heartbeat is unnecessary (handleAppend called on every hearbeat)
 
 	for i, entry := range args.Entries {
 		logIndex := args.PrevLogIndex + 1 + i
@@ -155,10 +179,12 @@ func (n *Node) handleAppendEntries(args *AppendEntriesArgs, reply *AppendEntries
 			if n.log[logIndex-1].Term != entry.Term { // overwrite entries only if there is a conflict
 				n.log = n.log[:logIndex-1]
 				n.log = append(n.log, args.Entries[i:]...)
+				logChanged = true
 				break
 			}
 		} else {
 			n.log = append(n.log, args.Entries[i:]...)
+			logChanged = true
 			break
 		}
 	}
@@ -166,11 +192,16 @@ func (n *Node) handleAppendEntries(args *AppendEntriesArgs, reply *AppendEntries
 	if args.LeaderCommit > n.commitIndex {
 		lastIndex, _ := n.lastLogIndexTerm()
 		n.commitIndex = min(args.LeaderCommit, lastIndex)
+		logChanged = true
+	}
+
+	if logChanged {
+		n.persistState()
 	}
 
 	reply.Success = true
 
-	if len(args.Entries) > 0 { // too many logs otherwise
+	if len(args.Entries) > 0 { // too many logs otherwise (handleAppend on every hearbeat)
 		log.Printf("node=%s REPLICATED entries=%d log=%d commit=%d ", n.id, len(args.Entries), len(n.log), n.commitIndex)
 	}
 

@@ -7,7 +7,7 @@ import (
 )
 
 type KVStore struct {
-	mu   sync.RWMutex
+	mu   sync.RWMutex // concurrent reads but exclusive writes
 	data map[string]string
 }
 
@@ -38,7 +38,7 @@ func (kv *KVStore) Apply(cmd Command) ApplyResult {
 	case "cas":
 		v, ok := kv.data[cmd.Key]
 		if !ok && cmd.Expected != "" {
-			log.Printf("KV CAS FAILED key-%s NOT FOUND", cmd.Key)
+			log.Printf("KV CAS FAILED key=%s NOT FOUND", cmd.Key)
 			return ApplyResult{Value: "", Ok: false}
 		}
 		if ok && cmd.Expected != v {
@@ -55,7 +55,7 @@ func (kv *KVStore) Apply(cmd Command) ApplyResult {
 }
 
 func (kv *KVStore) Get(key string) (val string, ok bool) {
-	kv.mu.RLock()
+	kv.mu.RLock() // allow concurrent reads
 	defer kv.mu.RUnlock()
 	val, ok = kv.data[key]
 	if !ok {
