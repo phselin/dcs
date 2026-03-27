@@ -35,10 +35,10 @@ const (
 )
 
 type Command struct {
-	Op            string `json:"op"`
-	Key           string `json:"key"`
-	Value         string `json:"value"`
-	ExpectedValue string `json:"expected_value"`
+	Op       string `json:"op"`
+	Key      string `json:"key"`
+	Value    string `json:"value"`
+	Expected string `json:"expected"`
 }
 
 type LogEntry struct {

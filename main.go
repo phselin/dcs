@@ -2,139 +2,116 @@ package main
 
 import (
 	"bufio"
+	"dcs/httpapi"
 	"dcs/raft"
-	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"strings"
-	"syscall"
-	"time"
 )
 
-const proposalTimeout = 5 * time.Second
+type nodeInfo struct {
+	id       string
+	node     *raft.Node
+	raftAddr string
+	httpAddr string
+	peers    []string
+	server   *httpapi.Server
+	alive    bool
+}
 
 func main() {
-	id := flag.String("id", "", "unique node id")
-	addr := flag.String("addr", "", "address")
-	peersFlag := flag.String("peers", "", "comma separated peer addresses")
-	flag.Parse()
+	raftAddrs := []string{":9001", ":9002", ":9003"}
+	httpAddrs := []string{":8001", ":8002", ":8003"}
+	ids := []string{"node1", "node2", "node3"}
 
-	if *id == "" || *addr == "" {
-		fmt.Println("Incorrect usage")
-		os.Exit(1)
+	peerHTTP := make(map[string]string, len(ids))
+	for i, id := range ids {
+		peerHTTP[id] = "localhost" + httpAddrs[i]
 	}
 
-	var peers []string
-	if *peersFlag != "" {
-		peers = strings.Split(*peersFlag, ",")
-	}
+	nodes := make(map[string]*nodeInfo)
 
-	node := raft.NewNode(*id, *addr, peers)
-	if err := node.Start(); err != nil {
-		fmt.Printf("Failed to START node=%v\n", err)
-		os.Exit(1)
-	}
-
-	go func() {
-		ticker := time.NewTicker(3 * time.Second)
-		defer ticker.Stop()
-		for {
-			nid, state, term, leader := node.GetStatus()
-			fmt.Printf("node=%s, state=%s term=%d leader=%s\n", nid, state, term, leader)
-			<-ticker.C
+	for i := range ids {
+		peers := append([]string{}, raftAddrs[:i]...)
+		peers = append(peers, raftAddrs[i+1:]...)
+		n := &nodeInfo{
+			id:       ids[i],
+			raftAddr: raftAddrs[i],
+			httpAddr: httpAddrs[i],
+			peers:    peers,
 		}
-	}()
+		nodes[ids[i]] = n
+		startNode(n, peerHTTP)
+	}
 
 	go func() {
 		scanner := bufio.NewScanner(os.Stdin)
-		fmt.Println("Type command to Propose")
 		for scanner.Scan() {
-			cmd := strings.TrimSpace(scanner.Text())
-			if cmd == "" {
+			input := strings.TrimSpace(scanner.Text())
+			if input == "" {
 				continue
 			}
-			handleCommandInput(node, cmd)
+			parts := strings.Fields(input)
+			switch parts[0] {
+			case "kill":
+				if len(parts) < 2 {
+					fmt.Println("incorrect usage")
+					continue
+				}
+				n, ok := nodes[parts[1]]
+				if !ok {
+					fmt.Printf("unknown node %s\n", parts[1])
+					continue
+				}
+				if !n.alive {
+					fmt.Printf("already dead %s\n", n.id)
+					continue
+				}
+				n.server.Stop()
+				n.node.Stop()
+				n.alive = false
+				fmt.Printf("killed node %s\n", n.id)
+
+			case "restart":
+				if len(parts) < 2 {
+					fmt.Println("incorrect usage")
+					continue
+				}
+				n, ok := nodes[parts[1]]
+				if !ok {
+					fmt.Printf("unknown node %s\n", parts[1])
+					continue
+				}
+				if n.alive {
+					fmt.Printf("already running %s", n.id)
+					continue
+				}
+				startNode(n, peerHTTP)
+				fmt.Printf("restarted node %s\n", n.id)
+
+			default:
+				fmt.Println("unknown command")
+			}
 		}
 	}()
 
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sig, os.Interrupt)
 	<-sig
-	node.Stop()
+
+	for _, n := range nodes {
+		if n.alive {
+			n.server.Stop()
+			n.node.Stop()
+		}
+	}
 }
 
-func handleCommandInput(node *raft.Node, cmdInput string) {
-	parts := strings.Fields(cmdInput)
-	if len(parts) == 0 {
-		return
-	}
-	switch strings.ToLower(parts[0]) {
-	case "put":
-		if len(parts) < 3 {
-			fmt.Println("Incorrect usage")
-			return
-		}
-		key := parts[1]
-		value := parts[2]
-		cmd := raft.Command{Op: "put", Key: key, Value: value}
-		result, err := node.Propose(cmd, proposalTimeout)
-		if err == nil {
-			fmt.Printf("PUT %s=%s\n", key, result.Value)
-		} else {
-			fmt.Printf("error=%s\n", err)
-		}
-	case "get":
-		if len(parts) < 2 {
-			fmt.Println("Incorrect usage")
-			return
-		}
-		key := parts[1]
-		val, ok, err := node.GetKV(key)
-		if err == nil {
-			if ok {
-				fmt.Printf("GET %s=%s\n", key, val)
-			} else {
-				fmt.Printf("NOT FOUND %s\n", key)
-			}
-		} else {
-			fmt.Printf("error=%v\n", err)
-		}
-	case "delete":
-		if len(parts) < 2 {
-			fmt.Println("Incorrect usage")
-			return
-		}
-		key := parts[1]
-		cmd := raft.Command{Op: "delete", Key: key}
-		result, err := node.Propose(cmd, proposalTimeout)
-		if err == nil {
-			fmt.Printf("DELETE %s=%s\n", key, result.Value)
-		} else {
-			fmt.Printf("error=%s\n", err)
-		}
-	case "cas":
-		if len(parts) < 4 {
-			fmt.Println("Incorrect usage")
-			return
-		}
-		key := parts[1]
-		expVal := parts[2]
-		val := parts[3]
-		cmd := raft.Command{Op: "cas", Key: key, ExpectedValue: expVal, Value: val}
-		result, err := node.Propose(cmd, proposalTimeout)
-		if err == nil {
-			fmt.Printf("CAS %s=%s\n", key, result.Value)
-		} else {
-			fmt.Printf("error=%s\n", err)
-		}
-	case "dump":
-		data := node.GetAllKV()
-		fmt.Println("KV Store:")
-		for k, v := range data {
-			fmt.Printf("key=%s value=%s\n", k, v)
-		}
-	case "default":
-		fmt.Println("Unknown command")
-	}
+func startNode(n *nodeInfo, peerHTTP map[string]string) {
+	n.node = raft.NewNode(n.id, n.raftAddr, n.peers)
+	n.node.Start()
+	n.server = httpapi.NewServer(n.node, peerHTTP)
+	n.server.Start(n.httpAddr)
+	n.alive = true
 }

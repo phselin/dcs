@@ -81,10 +81,10 @@ func (n *Node) GetStatus() (id string, state State, term int, leader string) {
 	return n.id, n.state, n.currentTerm, n.leaderID
 }
 
-func (n *Node) GetLogInfo() (logLen int, commitIndex int) {
+func (n *Node) GetLogInfo() (logLen, lastApplied, commitIndex int) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return len(n.log), n.commitIndex
+	return len(n.log), n.lastApplied, n.commitIndex
 }
 
 func (n *Node) stepDown(newTerm int) {
@@ -168,13 +168,15 @@ func (n *Node) Propose(cmd Command, timeout time.Duration) (ApplyResult, error) 
 	select {
 	case result := <-pendCh:
 		if result.Ok {
-			log.Printf("APPLY SUCCESS op=%s key=%s value=%s", cmd.Op, cmd.Key, result.Value)
+			log.Printf("APPLY SUCCESS op=%s key=%s value=%v", cmd.Op, cmd.Key, result.Value)
 		} else {
 			log.Printf("APPLY FAILED op=%s key=%s", cmd.Op, cmd.Key)
 		}
 		return result, nil
 	case <-time.After(timeout):
+		n.mu.Lock()
 		delete(n.pendingProposals, entry.Index)
+		n.mu.Unlock()
 		return ApplyResult{}, errors.New("timed out")
 	}
 }

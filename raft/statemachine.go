@@ -34,15 +34,15 @@ func (kv *KVStore) Apply(cmd Command) ApplyResult {
 		} else {
 			log.Printf("KV DELETE %s=%v", cmd.Key, v)
 		}
-		return ApplyResult{Ok: ok}
+		return ApplyResult{Value: v, Ok: ok}
 	case "cas":
 		v, ok := kv.data[cmd.Key]
-		if !ok && cmd.ExpectedValue != "" {
+		if !ok && cmd.Expected != "" {
 			log.Printf("KV CAS FAILED key-%s NOT FOUND", cmd.Key)
 			return ApplyResult{Value: "", Ok: false}
 		}
-		if ok && cmd.ExpectedValue != v {
-			log.Printf("KV CAS FAILED key=%s current=%s expected=%s", cmd.Key, v, cmd.ExpectedValue)
+		if ok && cmd.Expected != v {
+			log.Printf("KV CAS FAILED key=%s current=%s expected=%s", cmd.Key, v, cmd.Expected)
 			return ApplyResult{Value: v, Ok: false}
 		}
 		kv.data[cmd.Key] = cmd.Value
