@@ -1,0 +1,59 @@
+<!--AI generated-->
+
+<!doctype html>
+<html>
+    <head>
+        <title>DCS</title>
+    </head>
+    <body>
+        <div id="setup">
+            <h2>Start Cluster</h2>
+            Nodes (1-10):
+            <input id="node-count" type="number" min="1" max="10" />
+            <button onclick="initCluster()">Start</button>
+            <span id="setup-err" style="color: red"></span>
+        </div>
+
+        <div id="app" style="display: none">
+            <h2>Nodes</h2>
+            <div id="wipe-msg"></div>
+            <div id="nodes"></div>
+
+            <hr />
+            <h3>KV Store</h3>
+            Node:
+            <select id="dump-node" onchange="dumpKV()"></select>
+            <pre id="dump-out"></pre>
+
+            <hr />
+            <h3>Key-Value</h3>
+            Node:
+            <select id="kv-node"></select>
+            Key: <input id="kv-key" /> Value: <input id="kv-value" /> Expected:
+            <input id="kv-expected" /> Lease: <input id="kv-lease" />
+            <br />
+            <button onclick="kvOp('GET')">GET - key</button>
+            <button onclick="kvOp('PUT')">
+                PUT - key, value, lease(optional)
+            </button>
+            <button onclick="kvOp('DELETE')">DELETE - key</button>
+            <button onclick="kvOp('CAS')">CAS - key, value, expected</button>
+            <pre id="kv-out"></pre>
+
+            <hr />
+            <h3>Leases</h3>
+            Node:
+            <select id="lease-node"></select>
+            TTL: <input id="lease-ttl" type="number" size="4" /> Lease ID:
+            <input id="lease-id" /><br />
+            <button onclick="leaseOp('grant')">Grant - ttl</button>
+            <button onclick="leaseOp('revoke')">Revoke - lease id</button>
+            <button onclick="leaseOp('renew')">Renew - ttl, lease id</button>
+            <button onclick="leaseOp('info')">Info - lease id</button>
+            <button onclick="leaseOp('list')">List</button>
+            <pre id="lease-out"></pre>
+        </div>
+
+        <script src="script.js"></script>
+    </body>
+</html>

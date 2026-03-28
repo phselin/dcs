@@ -40,7 +40,7 @@ func (s *Server) Start(addr string) error {
 	mux.HandleFunc("/dump", s.handleDump)
 	mux.HandleFunc("/lease", s.handleLease)
 	mux.HandleFunc("/lease/", s.handleLeaseID)
-	s.httpServer = &http.Server{Addr: addr, Handler: mux}
+	s.httpServer = &http.Server{Addr: addr, Handler: corsMiddleware(mux)}
 	log.Printf("STARTING HTTP API on %s", addr)
 	go func() {
 		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -56,10 +56,24 @@ func (s *Server) Stop() {
 	s.httpServer.Shutdown(ctx)
 }
 
+// https://www.stackhawk.com/blog/golang-cors-guide-what-it-is-and-how-to-enable-it/ (Using Middleware for Better Organization)
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
 	key := strings.TrimPrefix(r.URL.Path, "/keys/")
 	if key == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing key"})
+		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "missing key"})
 		return
 	}
 
@@ -79,7 +93,7 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPatch:
 		s.handleCAS(w, r, key, body)
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		WriteJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
 }
 
@@ -90,14 +104,14 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, key string, b
 			s.forwardToLeader(w, r, body)
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
+		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
 		return
 	}
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found", "key": key})
+		WriteJSON(w, http.StatusNotFound, map[string]string{"error": "not found", "key": key})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"key": key, "value": val})
+	WriteJSON(w, http.StatusOK, map[string]string{"key": key, "value": val})
 }
 
 func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, key string, body []byte) {
@@ -106,7 +120,7 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, key string, b
 		LeaseID string `json:"leaseID"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}
 	cmd := raft.Command{Op: "put", Key: key, Value: req.Value, LeaseID: req.LeaseID}
@@ -116,11 +130,11 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, key string, b
 			s.forwardToLeader(w, r, body)
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
+		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
 		return
 	}
 	// result.Ok will never be false for put
-	writeJSON(w, http.StatusOK, map[string]string{"key": key, "value": result.Value})
+	WriteJSON(w, http.StatusOK, map[string]string{"key": key, "value": result.Value})
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, key string, body []byte) {
@@ -131,14 +145,14 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, key string
 			s.forwardToLeader(w, r, body)
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
+		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
 		return
 	}
 	if !result.Ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found", "key": key})
+		WriteJSON(w, http.StatusNotFound, map[string]string{"error": "not found", "key": key})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"key": key, "value": result.Value, "deleted": "true"})
+	WriteJSON(w, http.StatusOK, map[string]string{"key": key, "value": result.Value, "deleted": "true"})
 }
 
 func (s *Server) handleCAS(w http.ResponseWriter, r *http.Request, key string, body []byte) {
@@ -147,7 +161,7 @@ func (s *Server) handleCAS(w http.ResponseWriter, r *http.Request, key string, b
 		Value    string `json:"value"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}
 	cmd := raft.Command{Op: "cas", Key: key, Value: req.Value, Expected: req.Expected}
@@ -157,20 +171,20 @@ func (s *Server) handleCAS(w http.ResponseWriter, r *http.Request, key string, b
 			s.forwardToLeader(w, r, body)
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
+		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
 		return
 	}
 	if !result.Ok {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "cas failed", "key": key, "value": result.Value})
+		WriteJSON(w, http.StatusConflict, map[string]string{"error": "cas failed", "key": key, "value": result.Value})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"key": key, "value": result.Value})
+	WriteJSON(w, http.StatusOK, map[string]string{"key": key, "value": result.Value})
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	id, state, term, leader := s.node.GetStatus()
 	logLen, lastApplied, commitIndex := s.node.GetLogInfo()
-	writeJSON(w, http.StatusOK, map[string]any{
+	WriteJSON(w, http.StatusOK, map[string]any{
 		"id":          id,
 		"state":       state.String(),
 		"term":        term,
@@ -184,7 +198,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDump(w http.ResponseWriter, r *http.Request) {
 	data := s.node.GetAllKV()
 	id, state, _, _ := s.node.GetStatus()
-	writeJSON(w, http.StatusOK, map[string]any{
+	WriteJSON(w, http.StatusOK, map[string]any{
 		"id":    id,
 		"state": state.String(),
 		"data":  data,
@@ -203,7 +217,7 @@ func (s *Server) handleLease(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		s.handleLeaseGrant(w, r, body)
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		WriteJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
 }
 
@@ -218,7 +232,7 @@ func (s *Server) handleLeaseList(w http.ResponseWriter) {
 			"keys":      lease.Keys,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"leases": result})
+	WriteJSON(w, http.StatusOK, map[string]any{"leases": result})
 }
 
 func (s *Server) handleLeaseGrant(w http.ResponseWriter, r *http.Request, body []byte) {
@@ -226,7 +240,7 @@ func (s *Server) handleLeaseGrant(w http.ResponseWriter, r *http.Request, body [
 		TTL int `json:"ttl"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil || req.TTL <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}
 
@@ -236,10 +250,10 @@ func (s *Server) handleLeaseGrant(w http.ResponseWriter, r *http.Request, body [
 			s.forwardToLeader(w, r, body)
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
+		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"leaseID": result.LeaseID, "ttl": fmt.Sprintf("%v", req.TTL)})
+	WriteJSON(w, http.StatusOK, map[string]string{"leaseID": result.LeaseID, "ttl": fmt.Sprintf("%v", req.TTL)})
 }
 
 func (s *Server) handleLeaseID(w http.ResponseWriter, r *http.Request) {
@@ -247,7 +261,7 @@ func (s *Server) handleLeaseID(w http.ResponseWriter, r *http.Request) {
 	parts := strings.SplitN(path, "/", 2)
 	leaseID := parts[0]
 	if leaseID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing lease id"})
+		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "missing lease id"})
 		return
 	}
 
@@ -268,7 +282,7 @@ func (s *Server) handleLeaseID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.handleLeaseGet(w, r, leaseID, body)
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		WriteJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
 }
 
@@ -279,14 +293,14 @@ func (s *Server) handleLeaseRenew(w http.ResponseWriter, r *http.Request, leaseI
 			s.forwardToLeader(w, r, body)
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
+		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
 		return
 	}
 	if !result.Ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "lease not found", "leaseID": leaseID})
+		WriteJSON(w, http.StatusNotFound, map[string]string{"error": "lease not found", "leaseID": leaseID})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"leaseID": result.LeaseID, "renewed": "true"})
+	WriteJSON(w, http.StatusOK, map[string]string{"leaseID": result.LeaseID, "renewed": "true"})
 }
 
 func (s *Server) handleLeaseRevoke(w http.ResponseWriter, r *http.Request, leaseID string, body []byte) {
@@ -296,14 +310,14 @@ func (s *Server) handleLeaseRevoke(w http.ResponseWriter, r *http.Request, lease
 			s.forwardToLeader(w, r, body)
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
+		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
 		return
 	}
 	if !result.Ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "lease not found", "leaseID": leaseID})
+		WriteJSON(w, http.StatusNotFound, map[string]string{"error": "lease not found", "leaseID": leaseID})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"leaseID": result.LeaseID, "revoked": "true"})
+	WriteJSON(w, http.StatusOK, map[string]string{"leaseID": result.LeaseID, "revoked": "true"})
 }
 
 func (s *Server) handleLeaseGet(w http.ResponseWriter, r *http.Request, leaseID string, body []byte) {
@@ -313,14 +327,14 @@ func (s *Server) handleLeaseGet(w http.ResponseWriter, r *http.Request, leaseID 
 			s.forwardToLeader(w, r, body)
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
+		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
 		return
 	}
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "lease not found", "leaseID": leaseID})
+		WriteJSON(w, http.StatusNotFound, map[string]string{"error": "lease not found", "leaseID": leaseID})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	WriteJSON(w, http.StatusOK, map[string]any{
 		"leaseID":   lease.ID,
 		"ttl":       lease.TTL,
 		"expiresAt": lease.ExpiresAt,
@@ -331,26 +345,26 @@ func (s *Server) handleLeaseGet(w http.ResponseWriter, r *http.Request, leaseID 
 func (s *Server) forwardToLeader(w http.ResponseWriter, r *http.Request, body []byte) {
 	_, _, _, leader := s.node.GetStatus()
 	if leader == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no leader"})
+		WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no leader"})
 		return
 	}
 	leaderHTTPAddr, ok := s.peerHTTP[leader]
 	if !ok {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "leader HTTP address unknown"})
+		WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "leader HTTP address unknown"})
 		return
 	}
 
 	url := "http://" + leaderHTTPAddr + r.URL.Path
 	req, err := http.NewRequest(r.Method, url, bytes.NewReader(body))
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create forward request"})
+		WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create forward request"})
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to reach leader"})
+		WriteJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to reach leader"})
 		return
 	}
 
@@ -360,7 +374,7 @@ func (s *Server) forwardToLeader(w http.ResponseWriter, r *http.Request, body []
 	io.Copy(w, resp.Body)
 }
 
-func writeJSON(w http.ResponseWriter, status int, data any) {
+func WriteJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(data)
