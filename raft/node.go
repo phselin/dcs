@@ -36,6 +36,8 @@ type Node struct {
 
 	dataDir string
 
+	leaseCounter int
+
 	pendingProposals   map[int]chan ApplyResult // receiving and sending replication result for an index entry
 	resetElectionCh    chan struct{}
 	triggerReplicateCh chan struct{}
@@ -70,9 +72,10 @@ func (n *Node) Start() error {
 		return err
 	}
 
-	n.wg.Add(2)
+	n.wg.Add(3)
 	go n.runElectionTimer()
 	go n.applyLoop()
+	go n.leaseLoop()
 	return nil
 }
 
@@ -279,4 +282,80 @@ func (n *Node) confirmLeadership() bool {
 		}
 	}
 	return votes >= majority
+}
+
+func (n *Node) leaseLoop() {
+	defer n.wg.Done()
+
+	for {
+		select {
+		case <-n.stopCh:
+			return
+		case <-time.After(LeaseInterval):
+		}
+		n.mu.Lock()
+		isLeader := n.state == Leader
+		n.mu.Unlock()
+		if !isLeader {
+			continue
+		}
+		expired := n.KVStore.GetExpiredLeases()
+		for _, leaseID := range expired {
+			log.Printf("node=%s lease=%s EXPIRED", n.id, leaseID)
+			n.RevokeLease(leaseID)
+		}
+	}
+}
+
+// generate a lease id based on current term + counter
+func (n *Node) generateLeaseID() string {
+	n.leaseCounter++
+	return fmt.Sprintf("lease-%d-%d", n.currentTerm, n.leaseCounter)
+}
+
+func (n *Node) GrantLease(ttl time.Duration) (ApplyResult, error) {
+	n.mu.Lock()
+	leaseID := n.generateLeaseID()
+	n.mu.Unlock()
+
+	cmd := Command{
+		Op:        "leaseGrant",
+		LeaseID:   leaseID,
+		TTL:       ttl,
+		GrantedAt: time.Now(),
+	}
+	return n.Propose(cmd, ProposeTimeout)
+}
+
+func (n *Node) RevokeLease(leaseID string) (ApplyResult, error) {
+	cmd := Command{
+		Op:      "leaseRevoke",
+		LeaseID: leaseID,
+	}
+	return n.Propose(cmd, ProposeTimeout)
+}
+
+func (n *Node) RenewLease(leaseID string) (ApplyResult, error) {
+	cmd := Command{
+		Op:        "leaseRenew",
+		LeaseID:   leaseID,
+		GrantedAt: time.Now(),
+	}
+	return n.Propose(cmd, ProposeTimeout)
+}
+
+// leader only
+func (n *Node) GetLease(leaseID string) (*Lease, bool, error) {
+	n.mu.Lock()
+	if n.state != Leader {
+		defer n.mu.Unlock()
+		return nil, false, fmt.Errorf("%w, leader=%s", ErrNotLeader, n.leaderID)
+	}
+	n.mu.Unlock()
+	lease, ok := n.KVStore.GetLease(leaseID)
+	return lease, ok, nil
+}
+
+func (n *Node) GetAllLeases() map[string]*Lease {
+	return n.KVStore.GetAllLeases()
 }

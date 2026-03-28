@@ -38,6 +38,8 @@ func (s *Server) Start(addr string) error {
 	mux.HandleFunc("/keys/", s.handleKeys)
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/dump", s.handleDump)
+	mux.HandleFunc("/lease", s.handleLease)
+	mux.HandleFunc("/lease/", s.handleLeaseID)
 	s.httpServer = &http.Server{Addr: addr, Handler: mux}
 	log.Printf("STARTING HTTP API on %s", addr)
 	go func() {
@@ -100,13 +102,14 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, key string, b
 
 func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, key string, body []byte) {
 	var req struct {
-		Value string `json:"value"`
+		Value   string `json:"value"`
+		LeaseID string `json:"leaseID"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}
-	cmd := raft.Command{Op: "put", Key: key, Value: req.Value}
+	cmd := raft.Command{Op: "put", Key: key, Value: req.Value, LeaseID: req.LeaseID}
 	result, err := s.node.Propose(cmd, proposeTimeout)
 	if err != nil {
 		if errors.Is(err, raft.ErrNotLeader) {
@@ -185,6 +188,143 @@ func (s *Server) handleDump(w http.ResponseWriter, r *http.Request) {
 		"id":    id,
 		"state": state.String(),
 		"data":  data,
+	})
+}
+
+func (s *Server) handleLease(w http.ResponseWriter, r *http.Request) {
+	var body []byte
+	if r.Body != nil {
+		body, _ = io.ReadAll(r.Body)
+		r.Body.Close()
+	}
+	switch r.Method {
+	case http.MethodGet:
+		s.handleLeaseList(w)
+	case http.MethodPost:
+		s.handleLeaseGrant(w, r, body)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleLeaseList(w http.ResponseWriter) {
+	leases := s.node.GetAllLeases()
+	result := make([]map[string]any, 0, len(leases))
+	for _, lease := range leases {
+		result = append(result, map[string]any{
+			"leaseID":   lease.ID,
+			"ttl":       lease.TTL,
+			"expiresAt": lease.ExpiresAt,
+			"keys":      lease.Keys,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"leases": result})
+}
+
+func (s *Server) handleLeaseGrant(w http.ResponseWriter, r *http.Request, body []byte) {
+	var req struct {
+		TTL int `json:"ttl"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil || req.TTL <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+
+	result, err := s.node.GrantLease(time.Duration(req.TTL) * time.Second)
+	if err != nil {
+		if errors.Is(err, raft.ErrNotLeader) {
+			s.forwardToLeader(w, r, body)
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"leaseID": result.LeaseID, "ttl": fmt.Sprintf("%v", req.TTL)})
+}
+
+func (s *Server) handleLeaseID(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/lease/")
+	parts := strings.SplitN(path, "/", 2)
+	leaseID := parts[0]
+	if leaseID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing lease id"})
+		return
+	}
+
+	var body []byte
+	if r.Body != nil {
+		body, _ = io.ReadAll(r.Body)
+		r.Body.Close()
+	}
+
+	if len(parts) == 2 && parts[1] == "renew" && r.Method == http.MethodPost {
+		s.handleLeaseRenew(w, r, leaseID, body)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodDelete:
+		s.handleLeaseRevoke(w, r, leaseID, body)
+	case http.MethodGet:
+		s.handleLeaseGet(w, r, leaseID, body)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleLeaseRenew(w http.ResponseWriter, r *http.Request, leaseID string, body []byte) {
+	result, err := s.node.RenewLease(leaseID)
+	if err != nil {
+		if errors.Is(err, raft.ErrNotLeader) {
+			s.forwardToLeader(w, r, body)
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
+		return
+	}
+	if !result.Ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "lease not found", "leaseID": leaseID})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"leaseID": result.LeaseID, "renewed": "true"})
+}
+
+func (s *Server) handleLeaseRevoke(w http.ResponseWriter, r *http.Request, leaseID string, body []byte) {
+	result, err := s.node.RevokeLease(leaseID)
+	if err != nil {
+		if errors.Is(err, raft.ErrNotLeader) {
+			s.forwardToLeader(w, r, body)
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
+		return
+	}
+	if !result.Ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "lease not found", "leaseID": leaseID})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"leaseID": result.LeaseID, "revoked": "true"})
+}
+
+func (s *Server) handleLeaseGet(w http.ResponseWriter, r *http.Request, leaseID string, body []byte) {
+	lease, ok, err := s.node.GetLease(leaseID)
+	if err != nil {
+		if errors.Is(err, raft.ErrNotLeader) {
+			s.forwardToLeader(w, r, body)
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("%v", err)})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "lease not found", "leaseID": leaseID})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"leaseID":   lease.ID,
+		"ttl":       lease.TTL,
+		"expiresAt": lease.ExpiresAt,
+		"keys":      lease.Keys,
 	})
 }
 
