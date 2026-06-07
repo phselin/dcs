@@ -3,55 +3,403 @@
 <!doctype html>
 <html>
     <head>
-        <title>DCS</title>
+        <title>DCS · Distributed Coordination Service</title>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <style>
+            :root {
+                --bg: #0f1320;
+                --panel: #171c2e;
+                --panel-2: #1f2538;
+                --border: #2a3150;
+                --text: #e3e6f0;
+                --muted: #8a93ad;
+                --accent: #5b8cff;
+                --accent-2: #7c5cff;
+                --green: #3ecf8e;
+                --red: #ff5d6c;
+                --blue: #5b8cff;
+                --radius: 10px;
+            }
+
+            * {
+                box-sizing: border-box;
+            }
+
+            body {
+                margin: 0;
+                font-family:
+                    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                    Helvetica, Arial, sans-serif;
+                background: radial-gradient(
+                        circle at top left,
+                        #1b2140,
+                        var(--bg) 60%
+                    )
+                    fixed;
+                color: var(--text);
+                min-height: 100vh;
+                padding: 24px;
+            }
+
+            h2,
+            h3 {
+                margin: 0 0 14px;
+                font-weight: 600;
+                letter-spacing: 0.2px;
+            }
+
+            h2 {
+                font-size: 1.4rem;
+            }
+
+            h3 {
+                font-size: 1.1rem;
+                color: var(--muted);
+                text-transform: uppercase;
+                letter-spacing: 1px;
+                font-size: 0.85rem;
+            }
+
+            .title {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                margin-bottom: 24px;
+            }
+
+            .title .dot {
+                width: 12px;
+                height: 12px;
+                border-radius: 50%;
+                background: linear-gradient(135deg, var(--accent), var(--accent-2));
+                box-shadow: 0 0 16px var(--accent);
+            }
+
+            .title h1 {
+                font-size: 1.5rem;
+                margin: 0;
+                font-weight: 700;
+                letter-spacing: 1px;
+            }
+
+            .card {
+                background: var(--panel);
+                border: 1px solid var(--border);
+                border-radius: var(--radius);
+                padding: 20px 22px;
+                margin-bottom: 18px;
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+            }
+
+            #setup {
+                max-width: 420px;
+                margin: 12vh auto 0;
+                text-align: center;
+            }
+
+            #setup .row {
+                display: flex;
+                gap: 10px;
+                justify-content: center;
+                align-items: center;
+                margin-top: 14px;
+            }
+
+            label,
+            .label {
+                color: var(--muted);
+                font-size: 0.85rem;
+                margin-right: 4px;
+            }
+
+            input,
+            select {
+                background: var(--panel-2);
+                border: 1px solid var(--border);
+                color: var(--text);
+                border-radius: 8px;
+                padding: 8px 10px;
+                font-size: 0.9rem;
+                outline: none;
+                transition: border-color 0.15s ease;
+            }
+
+            input:focus,
+            select:focus {
+                border-color: var(--accent);
+            }
+
+            input[type="number"] {
+                width: 90px;
+            }
+
+            button {
+                background: var(--panel-2);
+                color: var(--text);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                padding: 8px 14px;
+                font-size: 0.85rem;
+                cursor: pointer;
+                transition:
+                    transform 0.05s ease,
+                    border-color 0.15s ease,
+                    background 0.15s ease;
+            }
+
+            button:hover {
+                border-color: var(--accent);
+                background: #232a44;
+            }
+
+            button:active {
+                transform: scale(0.97);
+            }
+
+            button.primary {
+                background: linear-gradient(135deg, var(--accent), var(--accent-2));
+                border: none;
+                color: #fff;
+                font-weight: 600;
+            }
+
+            button.primary:hover {
+                filter: brightness(1.08);
+            }
+
+            button.danger:hover {
+                border-color: var(--red);
+                color: var(--red);
+            }
+
+            button.subtle {
+                background: transparent;
+            }
+
+            #setup-err {
+                display: block;
+                margin-top: 10px;
+                color: var(--red);
+                font-size: 0.85rem;
+                min-height: 1.2em;
+            }
+
+            .field-grid {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 12px;
+                align-items: flex-end;
+                margin-bottom: 14px;
+            }
+
+            .field {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+            }
+
+            .field input,
+            .field select {
+                min-width: 140px;
+            }
+
+            .actions {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                margin-bottom: 14px;
+            }
+
+            .node-list {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+            }
+
+            .node-row {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                background: var(--panel-2);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                padding: 10px 14px;
+                flex-wrap: wrap;
+            }
+
+            .badge {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                font-weight: 700;
+                font-size: 0.85rem;
+                padding: 3px 10px;
+                border-radius: 999px;
+                white-space: nowrap;
+            }
+
+            .badge::before {
+                content: "";
+                width: 8px;
+                height: 8px;
+                border-radius: 50%;
+                background: currentColor;
+            }
+
+            .badge.leader {
+                color: var(--blue);
+                background: rgba(91, 140, 255, 0.12);
+            }
+
+            .badge.follower {
+                color: var(--green);
+                background: rgba(62, 207, 142, 0.12);
+            }
+
+            .badge.dead {
+                color: var(--red);
+                background: rgba(255, 93, 108, 0.12);
+            }
+
+            .node-info {
+                color: var(--muted);
+                font-size: 0.82rem;
+                font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+                flex: 1;
+                min-width: 220px;
+            }
+
+            .node-actions {
+                display: flex;
+                gap: 6px;
+            }
+
+            #wipe-msg {
+                color: var(--green);
+                font-size: 0.85rem;
+                margin-bottom: 10px;
+                min-height: 1.2em;
+            }
+
+            pre {
+                background: #0b0e19;
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                padding: 14px;
+                font-size: 0.82rem;
+                max-height: 260px;
+                overflow: auto;
+                color: #c8ceda;
+                margin: 0;
+            }
+
+            hr {
+                display: none;
+            }
+
+            .grid-2 {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+                gap: 18px;
+            }
+        </style>
     </head>
     <body>
-        <div id="setup">
-            <h2>Start Cluster</h2>
-            Nodes (1-10):
-            <input id="node-count" type="number" min="1" max="10" />
-            <button onclick="initCluster()">Start</button>
-            <span id="setup-err" style="color: red"></span>
+        <div class="title">
+            <span class="dot"></span>
+            <h1>DCS · Distributed Coordination Service</h1>
+        </div>
+
+        <div id="setup" class="card">
+            <h2>Start a Cluster</h2>
+            <div class="row">
+                <span class="label">Nodes (1-10):</span>
+                <input id="node-count" type="number" min="1" max="10" value="3" />
+                <button class="primary" onclick="initCluster()">Start</button>
+            </div>
+            <span id="setup-err"></span>
         </div>
 
         <div id="app" style="display: none">
-            <h2>Nodes</h2>
-            <div id="wipe-msg"></div>
-            <div id="nodes"></div>
+            <div class="card">
+                <h2>Nodes</h2>
+                <div id="wipe-msg"></div>
+                <div id="nodes" class="node-list"></div>
+            </div>
 
-            <hr />
-            <h3>KV Store</h3>
-            Node:
-            <select id="dump-node" onchange="dumpKV()"></select>
-            <pre id="dump-out"></pre>
+            <div class="grid-2">
+                <div class="card">
+                    <h3>KV Store Dump</h3>
+                    <div class="field-grid">
+                        <div class="field">
+                            <span class="label">Node</span>
+                            <select id="dump-node" onchange="dumpKV()"></select>
+                        </div>
+                        <button onclick="dumpKV()">Refresh</button>
+                    </div>
+                    <pre id="dump-out"></pre>
+                </div>
 
-            <hr />
-            <h3>Key-Value</h3>
-            Node:
-            <select id="kv-node"></select>
-            Key: <input id="kv-key" /> Value: <input id="kv-value" /> Expected:
-            <input id="kv-expected" /> Lease: <input id="kv-lease" />
-            <br />
-            <button onclick="kvOp('GET')">GET - key</button>
-            <button onclick="kvOp('PUT')">
-                PUT - key, value, lease(optional)
-            </button>
-            <button onclick="kvOp('DELETE')">DELETE - key</button>
-            <button onclick="kvOp('CAS')">CAS - key, value, expected</button>
-            <pre id="kv-out"></pre>
+                <div class="card">
+                    <h3>Key-Value</h3>
+                    <div class="field-grid">
+                        <div class="field">
+                            <span class="label">Node</span>
+                            <select id="kv-node"></select>
+                        </div>
+                        <div class="field">
+                            <span class="label">Key</span>
+                            <input id="kv-key" />
+                        </div>
+                        <div class="field">
+                            <span class="label">Value</span>
+                            <input id="kv-value" />
+                        </div>
+                        <div class="field">
+                            <span class="label">Expected</span>
+                            <input id="kv-expected" />
+                        </div>
+                        <div class="field">
+                            <span class="label">Lease</span>
+                            <input id="kv-lease" />
+                        </div>
+                    </div>
+                    <div class="actions">
+                        <button onclick="kvOp('GET')">GET</button>
+                        <button onclick="kvOp('PUT')">PUT</button>
+                        <button class="danger" onclick="kvOp('DELETE')">DELETE</button>
+                        <button onclick="kvOp('CAS')">CAS</button>
+                    </div>
+                    <pre id="kv-out"></pre>
+                </div>
+            </div>
 
-            <hr />
-            <h3>Leases</h3>
-            Node:
-            <select id="lease-node"></select>
-            TTL: <input id="lease-ttl" type="number" size="4" /> Lease ID:
-            <input id="lease-id" /><br />
-            <button onclick="leaseOp('grant')">Grant - ttl</button>
-            <button onclick="leaseOp('revoke')">Revoke - lease id</button>
-            <button onclick="leaseOp('renew')">Renew - ttl, lease id</button>
-            <button onclick="leaseOp('info')">Info - lease id</button>
-            <button onclick="leaseOp('list')">List</button>
-            <pre id="lease-out"></pre>
+            <div class="card">
+                <h3>Leases</h3>
+                <div class="field-grid">
+                    <div class="field">
+                        <span class="label">Node</span>
+                        <select id="lease-node"></select>
+                    </div>
+                    <div class="field">
+                        <span class="label">TTL</span>
+                        <input id="lease-ttl" type="number" size="4" />
+                    </div>
+                    <div class="field">
+                        <span class="label">Lease ID</span>
+                        <input id="lease-id" />
+                    </div>
+                </div>
+                <div class="actions">
+                    <button onclick="leaseOp('grant')">Grant</button>
+                    <button class="danger" onclick="leaseOp('revoke')">Revoke</button>
+                    <button onclick="leaseOp('renew')">Renew</button>
+                    <button onclick="leaseOp('info')">Info</button>
+                    <button onclick="leaseOp('list')">List</button>
+                </div>
+                <pre id="lease-out"></pre>
+            </div>
         </div>
 
         <script src="script.js"></script>

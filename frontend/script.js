@@ -51,18 +51,28 @@ async function refresh() {
   const d = document.getElementById("nodes");
   d.innerHTML = "";
   (r.nodes || []).forEach((n) => {
-    let color = n.alive ? (n.state === "Leader" ? "blue" : "green") : "red";
+    let badgeClass = !n.alive
+      ? "dead"
+      : n.state === "Leader"
+        ? "leader"
+        : "follower";
+    let badgeLabel = n.alive ? n.state : "DEAD";
     let info = n.alive
-      ? `${n.state} term=${n.term} leader=${n.leader || "?"} log=${n.logLength} commit=${n.commitIndex}`
-      : "DEAD";
+      ? `term=${n.term} leader=${n.leader || "?"} log=${n.logLength} commit=${n.commitIndex}`
+      : "node is offline";
     d.innerHTML +=
-      `<b style="color:${color}">${n.id}</b> [${info}] ` +
+      `<div class="node-row">` +
+      `<span class="badge ${badgeClass}">${n.id} · ${badgeLabel}</span>` +
+      `<span class="node-info">${info}</span>` +
+      `<span class="node-actions">` +
       `${
         n.alive
-          ? `<button onclick="api(server+'/kill/${n.id}','POST').then(refresh)">Kill</button>`
-          : `<button onclick="api(server+'/restart/${n.id}','POST').then(refresh)">Restart</button>`
+          ? `<button class="danger" onclick="api(server+'/kill/${n.id}','POST').then(refresh)">Kill</button>`
+          : `<button class="primary" onclick="api(server+'/restart/${n.id}','POST').then(refresh)">Restart</button>`
       }` +
-      ` <button onclick="api(server+'/wipe/${n.id}','POST').then(refresh)">Wipe</button><br>`;
+      `<button class="subtle" onclick="api(server+'/wipe/${n.id}','POST').then(refresh)">Wipe</button>` +
+      `</span>` +
+      `</div>`;
   });
   dumpKV();
 }
